@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- My Crypto app icon — "Refined Chart" (A1).
+     Brand indigo→violet squircle, rising line chart with soft area fill and a glowing
+     endpoint node. Balanced safe-area margins; line weight 26. -->
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M136,332 L216,272 L296,308 L376,180 L376,372 L136,372 Z" fill="url(#fill)"/>
+  <polyline points="136,332 216,272 296,308 376,180"
+            fill="none" stroke="#FFFFFF" stroke-width="26"
+            stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="376" cy="180" r="32" fill="#FFFFFF" opacity="0.26"/>
+  <circle cx="376" cy="180" r="19" fill="#FFFFFF"/>
+  <circle cx="376" cy="180" r="8"  fill="#8B5CF6"/>
+</svg>
