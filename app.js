@@ -37,6 +37,7 @@ const state = {
   chg30: {},           // symbol -> 30d % change
   prevPx: {},          // symbol -> previous price, for subtle flash-on-change
   scrubbing: false,    // true while user is scrubbing the overview chart
+  newsBusy: false,     // a news fetch pass is in flight
 };
 
 /* ---------- currencies ----------
@@ -898,6 +899,113 @@ function startAuto(){ stopAuto(); if(state.auto){ state.timer=setInterval(()=>re
   $("#autoState").textContent=state.auto?"auto 60s":"auto off"; $("#autoState").className=state.auto?"auto-on":"auto-off"; }
 function stopAuto(){ if(state.timer){clearInterval(state.timer);state.timer=null;} }
 
+/* ---------- news (rss2json, cache-first) ----------
+   Four crypto RSS feeds proxied through the free rss2json endpoint (CORS *, no key). The free
+   tier 422s on count/order_by/order_dir, so those params are never sent and the per-feed cap is
+   sliced client-side. Cache-first per feed ("news_"+url, 15 min TTL): cached items paint
+   instantly, the network only refetches in the background when stale. Always fire-and-forget —
+   it never gates a price refresh, and a fresh cache makes loadNews() a no-op. */
+const NEWS_TTL = 15*60*1000;
+const NEWS_PER_FEED = 10;
+const NEWS_MAX = 20;
+const FEEDS = [
+  { name:"Cointelegraph", url:"https://cointelegraph.com/rss" },
+  { name:"CoinDesk",       url:"https://www.coindesk.com/arc/outboundfeeds/rss/" },
+  { name:"Decrypt",        url:"https://decrypt.co/feed" },
+  { name:"The Block",      url:"https://www.theblock.co/rss.xml" },
+];
+const stripHTML = s => String(s==null?"":s).replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim();
+/* rss2json pubDate is "YYYY-MM-DD HH:mm:ss" in UTC — make the zone explicit, Safari needs it */
+const newsDate = s => { const t=Date.parse(String(s==null?"":s).replace(" ","T")+"Z"); return isNaN(t)?0:t; };
+function readNewsCache(f){
+  try{ const c=JSON.parse(localStorage.getItem("news_"+f.url)||"null");
+    return (c && Array.isArray(c.items)) ? c : null; }catch(e){ return null; }
+}
+function writeNewsCache(f, items){
+  try{ localStorage.setItem("news_"+f.url, JSON.stringify({t:Date.now(), items})); }catch(e){}
+}
+/* one raw rss2json item -> our card shape (everything untrusted; escaped at render) */
+function normalizeNews(f, it){
+  // rss2json returns enclosure as {link}, but the array form is documented too — take either
+  const enc = Array.isArray(it.enclosure) ? it.enclosure[0] : it.enclosure;
+  const encLink = enc && typeof enc==="object" ? enc.link : "";
+  const rawImg = String(it.thumbnail || encLink || "");
+  return {
+    title: stripHTML(it.title),
+    source: f.name,
+    url: String(it.link==null?"":it.link),
+    date: newsDate(it.pubDate),
+    // img is emitted via src="" — must be http(s) only; esc() cannot stop javascript: schemes
+    img: /^https?:/i.test(rawImg) ? rawImg : "",
+    summary: stripHTML(it.description).slice(0,180),
+    tags: (Array.isArray(it.categories) ? it.categories : [])
+      .map(c=>stripHTML(c)).filter(Boolean).slice(0,2),
+  };
+}
+async function fetchFeed(f){
+  try{
+    const r=await fetch("https://api.rss2json.com/v1/api.json?rss_url="+encodeURIComponent(f.url),{cache:"no-store"});
+    if(!r.ok) return;
+    const d=await r.json();
+    if(!d || d.status!=="ok" || !Array.isArray(d.items)) return;
+    const items=d.items.slice(0,NEWS_PER_FEED)
+      .map(it=>normalizeNews(f,it))
+      .filter(it=>it.title && /^https?:/i.test(it.url));
+    if(items.length) writeNewsCache(f, items);
+  }catch(e){ /* fall through — loadNews re-reads whatever the cache holds */ }
+}
+function mergeNews(caches){
+  const all=[];
+  for(const c of caches){ if(c && Array.isArray(c.items)) for(const it of c.items) if(it && it.title) all.push(it); }
+  all.sort((a,b)=>b.date-a.date);
+  return all.slice(0,NEWS_MAX);
+}
+function loadNews(force){
+  const cached=FEEDS.map(f=>readNewsCache(f));
+  const items=mergeNews(cached);
+  const stale=FEEDS.some((f,i)=>!cached[i] || Date.now()-(cached[i].t||0) > NEWS_TTL);
+  renderNews(items, items.length ? (stale ? "Updating…" : "") : "Loading…");
+  if(state.newsBusy || (!stale && !force)) return;
+  if(!navigator.onLine){
+    if(!items.length) renderNews([], "You're offline — pull to refresh when you're back.");
+    return;
+  }
+  state.newsBusy=true;
+  Promise.all(FEEDS.map(fetchFeed)).then(()=>{
+    state.newsBusy=false;
+    const fresh=mergeNews(FEEDS.map(f=>readNewsCache(f)));
+    renderNews(fresh, fresh.length ? "" : "News unavailable — pull to refresh.");
+  });
+}
+function renderNews(items, note){
+  const box=$("#newsList"); if(!box) return;
+  const st=$("#newsStatus"); if(st) st.textContent=note||"";
+  if(!items || !items.length){
+    box.innerHTML='<div class="news-empty empty muted">News unavailable — pull to refresh.</div>';
+    return;
+  }
+  box.innerHTML=items.map(it=>{
+    // render-side scheme re-gate: cached items are normalized, but localStorage is user-editable
+    const img = it.img && /^https?:/i.test(it.img) ? it.img : "";
+    const thumb = img
+      ? `<img class="news-img" src="${esc(img)}" alt="" loading="lazy" decoding="async"/>`
+      : `<span class="news-ph" aria-hidden="true">${esc(it.source.slice(0,2))}</span>`;
+    // summary falls back to the title when a feed ships no description (never render it twice)
+    const sum = it.summary || it.title;
+    const sumHtml = sum!==it.title ? `<span class="news-sum">${esc(sum)}</span>` : "";
+    const tags = it.tags.length
+      ? `<span class="news-tags">${it.tags.map(t=>`<i class="news-tag">${esc(t)}</i>`).join("")}</span>` : "";
+    const url = /^https?:/i.test(it.url) ? it.url : "#";
+    return `<a class="news-card" href="${esc(url)}" target="_blank" rel="noopener noreferrer">
+      ${thumb}
+      <span class="news-body">
+        <span class="news-meta"><span class="news-src">${esc(it.source)}</span><i aria-hidden="true">·</i><span class="news-time">${esc(relTime(it.date))}</span></span>
+        <span class="news-title">${esc(it.title)}</span>
+        ${sumHtml}${tags}
+      </span></a>`;
+  }).join("");
+}
+
 /* ---------- nav ---------- */
 function switchView(name){
   const doIt=()=>{ $$(".view").forEach(v=>v.classList.remove("active"));
@@ -907,6 +1015,7 @@ function switchView(name){
     if(name==="overview" && !state.chartLoaded) loadChart(); };
   // View Transitions API (#8) with reduced-motion respect
   if(document.startViewTransition && !REDUCE_MOTION){ document.startViewTransition(doIt); } else { doIt(); }
+  if(name==="news") loadNews();
 }
 
 /* ---------- export CSV + share (#8) ---------- */
@@ -979,7 +1088,7 @@ function wire(){
     state.chartRange=r; savePrefs();
     $$("#chartRange button").forEach(x=>x.classList.toggle("active",x===b));
     if(state.hist) drawChart(state.hist); });
-  $("#refreshBtn").addEventListener("click",()=>refresh(true));
+  $("#refreshBtn").addEventListener("click",()=>{ loadNews(true); refresh(true); });
   $("#autoToggle").addEventListener("change",e=>{state.auto=e.target.checked; startAuto();});
   // currency picker (Settings): pick the two currencies offered by the header toggle
   const onCcySlot=(slot,val)=>{
@@ -1014,6 +1123,9 @@ function wire(){
   // hide a coin logo that fails to load, revealing the colored-initial fallback (CSP-safe, no inline onerror)
   $("#portfolioList").addEventListener("error",e=>{ const t=e.target;
     if(t && t.classList && t.classList.contains("h-logo")) t.style.display="none"; }, true);
+  // same for a news thumbnail from a dead CDN — drop it, the card keeps its text (CSP-safe, no inline onerror)
+  $("#view-news").addEventListener("error",e=>{ const t=e.target;
+    if(t && t.classList && t.classList.contains("news-img")) t.style.display="none"; }, true);
   $("#mainTable tbody").addEventListener("click",e=>openFromEl(e.target.closest("tr[data-asset]")));
   $("#detailClose").addEventListener("click",closeDetail);
   $("#detailBackdrop").addEventListener("click",closeDetail);
@@ -1050,7 +1162,7 @@ function wire(){
     if(dist>0 && window.scrollY<=0){ const p=Math.min(dist/THRESH,1.3); ptr.classList.add("show");
       ptr.style.transform=`translateX(-50%) scale(${0.6+p*0.4})`+(REDUCE_MOTION?"":` rotate(${dist}deg)`); } },{passive:true});
   window.addEventListener("touchend",async()=>{ if(!pulling) return; pulling=false;
-    if(dist>THRESH){ ptr.classList.add("spin"); await refresh(true); ptr.classList.remove("spin"); }
+    if(dist>THRESH){ ptr.classList.add("spin"); loadNews(true); await refresh(true); ptr.classList.remove("spin"); }
     ptr.classList.remove("show"); ptr.style.transform="translateX(-50%) scale(.6)"; dist=0; },{passive:true});
 
   // table fade on scroll
