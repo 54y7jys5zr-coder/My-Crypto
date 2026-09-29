@@ -14,7 +14,7 @@ const state = {
   ccyPair: ["EUR","PLN"], // the two currencies offered by the top toggle (user-configurable)
   view: 1,             // 1 = All Holdings (total), 3 = Invested Only (deployed)
   tableOpt: 1,
-  sortKey: "value",    // table sort
+  sortKey: "ret",      // table sort (default: Return %)
   sortDir: -1,
   auto: true,
   timer: null,
@@ -63,8 +63,10 @@ function loadPrefs(){
   state.chartRange= (p.chartRange!=null && !isNaN(+p.chartRange)) ? +p.chartRange : 365;
   state.view      = +p.view      || 1;
   state.tableOpt  = +p.tableOpt  || 1;
-  state.sortKey   = p.sortKey   || "value";
+  state.sortKey   = p.sortKey   || "ret";
   state.sortDir   = +p.sortDir  || -1;
+  // one-time migration: the table default changed to Return % desc, so override the persisted pair once
+  if(p.prefsV!==2){ state.sortKey="ret"; state.sortDir=-1; }
   // currency pair (2 codes) + last-selected display currency
   if(Array.isArray(p.ccyPair) && p.ccyPair.length===2 && p.ccyPair.every(c=>CCY[c]))
     state.ccyPair = p.ccyPair;
@@ -74,7 +76,7 @@ function savePrefs(){
   try{ localStorage.setItem("prefs", JSON.stringify({
     cardSort:state.cardSort, chartRange:state.chartRange, view:state.view,
     tableOpt:state.tableOpt, sortKey:state.sortKey, sortDir:state.sortDir,
-    ccyPair:state.ccyPair, ccy:state.ccy })); }catch(e){}
+    ccyPair:state.ccyPair, ccy:state.ccy, prefsV:2 })); }catch(e){}
 }
 function saveAlerts(){ try{ localStorage.setItem("alerts", JSON.stringify(state.alerts)); }catch(e){} }
 function applyPrefUI(){
@@ -444,7 +446,7 @@ function renderOverview(scrub){
       <div class="sub">${p24?(arrowOf(p24.abs)+" "+fmtMoneyCompact(Math.abs(p24.abs))):"live"}</div></div>
     <div class="stat"><div class="k">Realized</div><div class="v" style="color:${plColorOf(m.total_realized)}">${fmtMoney(m.total_realized)}</div>
       <div class="sub">already sold</div></div>
-    <div class="stat"><div class="k">Top mover 24h</div><div class="v" style="color:${plColorOf(mover?mover.chg:null)}">${mover?esc(mover.asset):"—"}</div>
+    <div class="stat"><div class="k">Top mover</div><div class="v" style="color:${plColorOf(mover?mover.chg:null)}">${mover?esc(mover.asset):"—"}</div>
       <div class="sub">${mover?pct(mover.chg):"—"}</div></div>`;
 }
 
@@ -1011,7 +1013,9 @@ function switchView(name){
   const doIt=()=>{ $$(".view").forEach(v=>v.classList.remove("active"));
     $("#view-"+name).classList.add("active");
     $$(".bottom-nav button").forEach(b=>b.classList.toggle("active", b.dataset.nav===name));
-    document.body.classList.toggle("tab-overview", name==="overview");
+    const bcls=document.body.classList;
+    Array.from(bcls).filter(c=>c.startsWith("tab-")).forEach(c=>bcls.remove(c));
+    bcls.add("tab-"+name);
     if(name==="overview" && !state.chartLoaded) loadChart(); };
   // View Transitions API (#8) with reduced-motion respect
   if(document.startViewTransition && !REDUCE_MOTION){ document.startViewTransition(doIt); } else { doIt(); }
@@ -1156,14 +1160,20 @@ function wire(){
     $("#obClose").addEventListener("click",dismiss); const g=$("#obGo"); if(g) g.addEventListener("click",dismiss); }
 
   // pull-to-refresh
-  const ptr=$("#ptr"); let startY=0, pulling=false, dist=0; const THRESH=70;
-  window.addEventListener("touchstart",e=>{ if(window.scrollY<=0 && e.touches.length===1){ startY=e.touches[0].clientY; pulling=true; dist=0; } },{passive:true});
-  window.addEventListener("touchmove",e=>{ if(!pulling) return; dist=e.touches[0].clientY-startY;
-    if(dist>0 && window.scrollY<=0){ const p=Math.min(dist/THRESH,1.3); ptr.classList.add("show");
+  const ptr=$("#ptr"); let startX=0, startY=0, pulling=false, dist=0, axis=null;
+  const THRESH=()=>window.innerHeight*0.18;
+  window.addEventListener("touchstart",e=>{ if(window.scrollY<=0 && e.touches.length===1){ startX=e.touches[0].clientX; startY=e.touches[0].clientY; pulling=true; dist=0; axis=null; } },{passive:true});
+  window.addEventListener("touchmove",e=>{ if(!pulling) return; const dx=e.touches[0].clientX-startX, dy=e.touches[0].clientY-startY;
+    if(!axis){ if(Math.abs(dx)<10 && Math.abs(dy)<10) return; axis=Math.abs(dy)>Math.abs(dx)?"y":"x"; }
+    if(axis!=="y") return;
+    dist=dy;
+    if(dist>0 && window.scrollY<=0){ const p=Math.min(dist/THRESH(),1.3); ptr.classList.add("show");
       ptr.style.transform=`translateX(-50%) scale(${0.6+p*0.4})`+(REDUCE_MOTION?"":` rotate(${dist}deg)`); } },{passive:true});
-  window.addEventListener("touchend",async()=>{ if(!pulling) return; pulling=false;
-    if(dist>THRESH){ ptr.classList.add("spin"); loadNews(true); await refresh(true); ptr.classList.remove("spin"); }
-    ptr.classList.remove("show"); ptr.style.transform="translateX(-50%) scale(.6)"; dist=0; },{passive:true});
+  const endPull=async(doRefresh)=>{ if(!pulling) return; pulling=false;
+    if(doRefresh && dist>THRESH()){ ptr.classList.add("spin"); loadNews(true); await refresh(true); ptr.classList.remove("spin"); }
+    ptr.classList.remove("show"); ptr.style.transform="translateX(-50%) scale(.6)"; dist=0; };
+  window.addEventListener("touchend",()=>endPull(true),{passive:true});
+  window.addEventListener("touchcancel",()=>endPull(false),{passive:true});
 
   // table fade on scroll
   const ts=$("#tableScroll"), tw=ts&&ts.querySelector(".table-wrap");

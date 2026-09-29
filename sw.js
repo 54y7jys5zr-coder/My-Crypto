@@ -1,5 +1,5 @@
 /* Service worker: offline app shell. Prices/FX are always fetched live (network-first, no cache). */
-const CACHE = "portfolio-v19";
+const CACHE = "portfolio-v20";
 const SHELL = [
   "./","./index.html","./styles.css","./app.js","./engine.js","./data.json",
   "./chart.umd.min.js","./manifest.webmanifest",
