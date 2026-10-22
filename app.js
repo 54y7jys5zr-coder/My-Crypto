@@ -916,9 +916,15 @@ const FEEDS = [
   { name:"Decrypt",        url:"https://decrypt.co/feed" },
   { name:"The Block",      url:"https://www.theblock.co/rss.xml" },
 ];
+const CRYPTOVISION_URL = "https://cryptocurrency.cv/api/news";
 const stripHTML = s => String(s==null?"":s).replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim();
-/* rss2json pubDate is "YYYY-MM-DD HH:mm:ss" in UTC — make the zone explicit, Safari needs it */
-const newsDate = s => { const t=Date.parse(String(s==null?"":s).replace(" ","T")+"Z"); return isNaN(t)?0:t; };
+/* rss2json pubDate is "YYYY-MM-DD HH:mm:ss" in UTC — make the zone explicit, Safari needs it.
+   Crypto Vision returns ISO "…Z" already; accept both without double-Z. */
+const newsDate = s => {
+  const t = String(s==null?"":s);
+  if(t.endsWith("Z")) return Date.parse(t);
+  return Date.parse(t.replace(" ","T")+"Z");
+};
 function readNewsCache(f){
   try{ const c=JSON.parse(localStorage.getItem("news_"+f.url)||"null");
     return (c && Array.isArray(c.items)) ? c : null; }catch(e){ return null; }
@@ -956,16 +962,52 @@ async function fetchFeed(f){
     if(items.length) writeNewsCache(f, items);
   }catch(e){ /* fall through — loadNews re-reads whatever the cache holds */ }
 }
+/* Crypto Vision: JSON REST, no key, CORS yes. Returns articles[]; map to the same card shape. */
+async function fetchCryptoVision(){
+  try{
+    const r=await fetch(CRYPTOVISION_URL,{cache:"no-store"});
+    if(!r.ok) return;
+    const d=await r.json();
+    if(!d || !Array.isArray(d.articles)) return;
+    const f={name:"Crypto Vision",url:CRYPTOVISION_URL};
+    const items=d.articles
+      .map(it=>normalizeCryptoVision(f,it))
+      .filter(it=>it.title && /^https?:/i.test(it.url));
+    if(items.length) writeNewsCache(f, items);
+  }catch(e){ /* fall through — loadNews re-reads whatever the cache holds */ }
+}
+function normalizeCryptoVision(f, it){
+  return {
+    title: stripHTML(it.title),
+    source: stripHTML(it.source||f.name),
+    url: String(it.link==null?"":it.link),
+    date: newsDate(it.pubDate),
+    img: /^https?:/i.test(it.image||"") ? it.image : "",
+    summary: stripHTML(it.description).slice(0,180),
+    tags: it.category ? [stripHTML(it.category)] : [],
+  };
+}
 function mergeNews(caches){
   const all=[];
-  for(const c of caches){ if(c && Array.isArray(c.items)) for(const it of c.items) if(it && it.title) all.push(it); }
+  const seen=new Set();
+  for(const c of caches){
+    if(c && Array.isArray(c.items)){
+      for(const it of c.items){
+        if(it && it.title && !seen.has(it.url)){
+          seen.add(it.url);
+          all.push(it);
+        }
+      }
+    }
+  }
   all.sort((a,b)=>b.date-a.date);
   return all.slice(0,NEWS_MAX);
 }
 function loadNews(force){
-  const cached=FEEDS.map(f=>readNewsCache(f));
+  const cv={name:"Crypto Vision",url:CRYPTOVISION_URL};
+  const cached=[...FEEDS.map(f=>readNewsCache(f)),readNewsCache(cv)];
   const items=mergeNews(cached);
-  const stale=FEEDS.some((f,i)=>!cached[i] || Date.now()-(cached[i].t||0) > NEWS_TTL);
+  const stale=[...FEEDS,cv].some((f,i)=>!cached[i] || Date.now()-(cached[i].t||0) > NEWS_TTL);
   renderNews(items, items.length ? (stale ? "Updating…" : "") : "Loading…");
   if(state.newsBusy || (!stale && !force)) return;
   if(!navigator.onLine){
@@ -973,10 +1015,10 @@ function loadNews(force){
     return;
   }
   state.newsBusy=true;
-  Promise.all(FEEDS.map(fetchFeed)).then(()=>{
+  Promise.all([...FEEDS.map(fetchFeed),fetchCryptoVision()]).then(()=>{
     state.newsBusy=false;
-    const fresh=mergeNews(FEEDS.map(f=>readNewsCache(f)));
-    renderNews(fresh, fresh.length ? "" : "News unavailable — pull to refresh.");
+    const fresh=[...FEEDS.map(f=>readNewsCache(f)),readNewsCache(cv)];
+    renderNews(mergeNews(fresh), fresh.length ? "" : "News unavailable — pull to refresh.");
   });
 }
 function renderNews(items, note){
