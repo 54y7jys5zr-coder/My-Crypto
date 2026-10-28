@@ -1,0 +1,5 @@
+txid,ordertxid,pair,time,type,ordertype,price,cost,fee,vol,margin,misc,ledgers
+TR0001,OR0001,XBT/EUR,2025-01-06 10:00:00,buy,market,60000,2995,5,0.05,0,,
+TR0002,OR0002,ETH/EUR,2025-02-01 10:00:00,buy,market,2500,1497,3,0.6,0,,
+TR0003,OR0003,SOL/EUR,2025-03-10 10:00:00,buy,market,133.33,399,1,3,0,,
+TR0004,OR0004,ETH/EUR,2025-06-01 10:00:00,sell,market,3500,700,1.5,0.2,0,,

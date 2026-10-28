@@ -1,0 +1,14 @@
+{
+  "name": "my-crypto",
+  "private": true,
+  "description": "Private-by-design crypto portfolio tracker (static PWA).",
+  "scripts": {
+    "test": "node --test tests/",
+    "test:e2e": "node tests/e2e/run.js",
+    "test:all": "npm test && npm run test:e2e"
+  },
+  "devDependencies": {
+    "axe-core": "4.10",
+    "playwright-core": "1.47"
+  }
+}

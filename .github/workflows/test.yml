@@ -1,0 +1,45 @@
+# Runs on every push and pull request:
+#  - engine: syntax check + engine regression tests (tests needing the local-only, gitignored
+#    sample_csv/ fixtures skip automatically)
+#  - e2e: browser suites in tests/e2e (synthetic fixtures, every external API mocked, axe-core)
+#  - lighthouse: accessibility / best-practices gate on the static site
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check
+        run: for f in app.js engine.js sw.js theme.js sentiment-worker.js; do node --check "$f"; done
+      - name: Engine tests
+        run: npm test
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright-core install --with-deps chromium
+      - name: Browser suites
+        run: npm run test:e2e
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Lighthouse CI
+        run: npx -y @lhci/cli@0.14 autorun
